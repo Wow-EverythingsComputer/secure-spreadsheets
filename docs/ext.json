@@ -1,0 +1,10 @@
+{
+  "identifier": "io.github.wow-everythingscomputer.secure-spreadsheets-autodate",
+  "name": "Spreadsheets (auto-date)",
+  "description": "Standard Notes Spreadsheets with today's date auto-filled in column A when you start a new row.",
+  "content_type": "SN|Component",
+  "area": "editor-editor",
+  "version": "1.0.0",
+  "url": "https://wow-everythingscomputer.github.io/secure-spreadsheets/index.html",
+  "latest_url": "https://wow-everythingscomputer.github.io/secure-spreadsheets/ext.json"
+}
