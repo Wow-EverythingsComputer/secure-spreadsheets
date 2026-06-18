@@ -1,0 +1,10 @@
+{
+  "identifier": "io.github.wow-everythingscomputer.sn-relay-diag",
+  "name": "Relay Diagnostic (temp)",
+  "description": "Temporary diagnostic — checks whether a current comms library receives the note on this device. Read-only; safe to uninstall after testing.",
+  "content_type": "SN|Component",
+  "area": "editor-editor",
+  "version": "1.0.0",
+  "url": "https://wow-everythingscomputer.github.io/secure-spreadsheets/diag.html",
+  "latest_url": "https://wow-everythingscomputer.github.io/secure-spreadsheets/diag-ext.json"
+}

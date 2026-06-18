@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SN Relay Diagnostic</title>
+<style>
+  body { font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 18px; color: #19191c; background: #fff; }
+  #status { font-size: 19px; font-weight: 700; margin-bottom: 10px; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; } .warn { color: #9a6700; }
+  #detail { margin-bottom: 12px; }
+  .muted { color: #6e7781; font-size: 13px; }
+  pre { white-space: pre-wrap; word-break: break-all; background: #f4f4f6; padding: 10px; border-radius: 8px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <div id="status" class="warn">Loading diagnostic…</div>
+  <div id="detail" class="muted">Checking whether a current Standard Notes comms library receives this note on this device.</div>
+  <div id="env" class="muted"></div>
+  <pre id="dump" hidden></pre>
+<script type="module">
+  var $ = function (id) { return document.getElementById(id); };
+  var got = false;
+  function show(cls, msg) { var s = $("status"); s.className = cls; s.textContent = msg; }
+
+  try {
+    var mod = await import("https://esm.sh/sn-extension-api");
+    var api = mod.default;
+    api.initialize();
+    api.subscribe(function () {
+      got = true;
+      var t = api.text || "";
+      show("ok", "✅ Connected — note received (" + t.length + " chars)");
+      $("detail").textContent = "A current comms library WORKS on this device. Rebuilding the spreadsheet with it should fix native mobile.";
+      $("env").textContent = "browser=" + api.isRunningInBrowser + " · desktop=" + api.isRunningInDesktopApplication + " · mobile=" + api.isRunningInMobileApplication;
+      var d = $("dump"); d.hidden = false; d.textContent = t.slice(0, 200);
+    });
+  } catch (e) {
+    show("bad", "⚠️ Couldn't load the comms library from the CDN");
+    $("detail").textContent = "This device blocked loading the library. Inconclusive — tell Claude this happened. (" + e + ")";
+  }
+
+  setTimeout(function () {
+    if (!got) {
+      show("bad", "❌ No note received");
+      $("detail").textContent = "The editor loaded but Standard Notes never delivered the note to it on this device. If this is mobile, native third-party editors can't get note data here — a rebuild won't help.";
+    }
+  }, 6000);
+</script>
+</body>
+</html>
