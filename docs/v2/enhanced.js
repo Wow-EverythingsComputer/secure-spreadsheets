@@ -255,23 +255,6 @@
     buildSheetList();
   }
 
-  // ---------- temporary on-screen debug (removed once mobile is diagnosed) ----------
-  function installDebug() {
-    var box = document.createElement("div");
-    box.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:100000;background:rgba(0,0,0,.82);" +
-      "color:#3f3;font:11px/1.35 monospace;padding:4px 6px;word-break:break-all";
-    box.title = "tap to hide";
-    box.addEventListener("click", function () { box.style.display = "none"; });
-    document.body.appendChild(box);
-    setInterval(function () {
-      var live = "?"; try { live = (ss.sheets() || []).length; } catch (e) {}
-      var dataSheets = (lastData && lastData.sheets) ? lastData.sheets.length : "none";
-      var len = 0; try { len = lastData ? JSON.stringify(lastData).length : 0; } catch (e) { len = "?"; }
-      box.textContent = "SE-debug 1.3 — note delivered (fromJSON)=" + fromJSONCount +
-        " | data sheets=" + dataSheets + " | grid sheets=" + live + " | bytes=" + len;
-    }, 1000);
-  }
-
   // ---------- startup ----------
   function start(sp) {
     ss = sp;
@@ -279,7 +262,6 @@
     ss.bind("change", function () { fillDates(); });   // core auto-date (works even if UI fails)
     try { injectUI(); refreshPanel(); } catch (e) { console.warn("[Enhanced] UI failed", e); }
     try { ensureRendered(); } catch (e) {}             // mobile render safety net
-    try { installDebug(); } catch (e) {}               // TEMP: on-screen mobile diagnosis
     console.log("[Spreadsheet Enhanced] ready");
   }
 
