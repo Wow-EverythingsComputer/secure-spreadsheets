@@ -7,11 +7,12 @@
  *
  * Features:
  *   • Auto-date: when a new row (row 2 down) gets content but column A is empty, column A is
- *     stamped with today's date as a real value (frozen, editable, never overwrites a typed date).
+ *     stamped with today's date as a real, frozen value (never overwrites a typed date).
  *   • Per-sheet toggle: auto-date can be turned on/off per sheet.
  *   • Date format: choose how the stamped date is displayed.
+ *   • Mobile self-heal: re-applies saved content if a slow mobile webview fails to render it.
  *
- * Settings persist INSIDE the note (as a hidden "__enhanced__" key in the saved JSON, the same
+ * Settings persist INSIDE the note (a hidden "__enhanced__" key in the saved JSON, the same
  * trick the editor uses for rows/columns), so they sync across devices. No extra sheet/tab.
  */
 (function () {
@@ -35,10 +36,12 @@
 
   // ---------- state ----------
   // config.autodate maps sheetName -> boolean. A sheet not listed defaults to ON.
-  var config  = { v: 1, dateFormat: DEFAULT_FMT, autodate: {} };
-  var ss      = null;     // the Kendo Spreadsheet widget
-  var applying = false;   // guard so our own edits don't recurse
-  var els      = null;    // settings-panel DOM refs
+  var config   = { v: 1, dateFormat: DEFAULT_FMT, autodate: {} };
+  var ss       = null;     // the Kendo Spreadsheet widget
+  var applying = false;    // guard so our own edits don't recurse
+  var els      = null;     // settings-panel DOM refs
+  var origFrom = null;     // original Kendo fromJSON (for the mobile self-heal re-render)
+  var lastData = null;     // last full payload passed to fromJSON (sheets + settings)
 
   // ---------- helpers ----------
   function todayAtMidnight() { var d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
@@ -47,8 +50,8 @@
 
   // ---------- persistence: piggyback on the note's saved JSON ----------
   function installPersistence(sp) {
-    var origTo   = sp.toJSON.bind(sp);
-    var origFrom = sp.fromJSON.bind(sp);
+    var origTo = sp.toJSON.bind(sp);
+    origFrom   = sp.fromJSON.bind(sp);
     sp.toJSON = function () {
       var j = origTo();
       try { j[KEY] = config; } catch (e) {}
@@ -56,6 +59,7 @@
     };
     sp.fromJSON = function (data) {
       try {
+        lastData = data;                      // remember what we were asked to load (for self-heal)
         var loaded = data && data[KEY];
         if (loaded && typeof loaded === "object") {
           config = {
@@ -129,6 +133,34 @@
         if (!isEmpty(v)) { try { sheet.range(r, 0).format(fmt); } catch (e) {} }
       }
     } finally { applying = false; }
+  }
+
+  // ---------- mobile self-heal ----------
+  // Some mobile webviews finish loading a note before the grid is ready to paint, so the saved
+  // sheets never render (you see a blank default sheet). We watch briefly and, if the live grid's
+  // sheets don't match the data we were handed, we re-apply that data and force a redraw.
+  // This only RE-RENDERS — it never saves — and on desktop (where it already matches) it's a no-op.
+  function ensureRendered() {
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries++;
+      try {
+        var expected = (lastData && lastData.sheets)
+          ? lastData.sheets.map(function (s) { return s.name; }) : null;
+        if (expected && expected.length && origFrom) {
+          var live = [];
+          try { live = (ss.sheets() || []).map(function (s) { try { return s.name(); } catch (e) { return ""; } }); } catch (e) {}
+          var match = live.length === expected.length && expected.every(function (n) { return live.indexOf(n) >= 0; });
+          if (match) { clearInterval(timer); return; }     // content is in — done
+          origFrom(lastData);                               // re-render saved content (no save)
+          try { ss.refresh(); } catch (e) {}
+          try { window.dispatchEvent(new Event("resize")); } catch (e) {}
+          if (els) refreshPanel();
+          console.log("[Spreadsheet Enhanced] re-applied content (mobile self-heal)");
+        }
+      } catch (e) {}
+      if (tries > 20) clearInterval(timer);                 // give up after ~6s
+    }, 300);
   }
 
   // ---------- settings panel (plain DOM, no framework) ----------
@@ -227,6 +259,7 @@
     try { installPersistence(ss); } catch (e) { console.warn("[Enhanced] persistence hook failed", e); }
     ss.bind("change", function () { fillDates(); });   // core auto-date (works even if UI fails)
     try { injectUI(); refreshPanel(); } catch (e) { console.warn("[Enhanced] UI failed", e); }
+    try { ensureRendered(); } catch (e) {}             // mobile render safety net
     console.log("[Spreadsheet Enhanced] ready");
   }
 
