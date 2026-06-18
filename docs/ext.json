@@ -1,10 +1,10 @@
 {
   "identifier": "io.github.wow-everythingscomputer.secure-spreadsheets-autodate",
   "name": "Spreadsheet Enhanced",
-  "description": "Enhancements for the Standard Notes Spreadsheets editor. First feature: auto-fill today's date on new rows (per-sheet toggle and selectable date formats coming).",
+  "description": "Enhancements for the Standard Notes Spreadsheets editor. Auto-fill today's date on new rows, with a configurable date column + header rows, selectable date formats, and a per-sheet toggle (off by default for sheets that already contain data).",
   "content_type": "SN|Component",
   "area": "editor-editor",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "url": "https://wow-everythingscomputer.github.io/secure-spreadsheets/v2/index.html",
   "latest_url": "https://wow-everythingscomputer.github.io/secure-spreadsheets/ext.json"
 }
