@@ -8,9 +8,10 @@ that adds features on top of the official editor, without modifying its bundle.
   today's date as a real, frozen value (never overwrites a date you type). Rows that already
   existed when the sheet was opened are baselined and left untouched, so switching an existing
   spreadsheet to this editor does **not** back-fill dates onto old rows.
-- **Configurable layout** — pick which column gets the date and how many header rows to skip
-  from the ⚙ panel. Defaults to column A / 1 header row (so blank sheets work out of the box),
-  but existing sheets that keep their data in column A can point the date at any empty column.
+- **Configurable layout** — from the ⚙ panel pick which column gets the date, how many header
+  rows to skip, and which **data columns** count as a line item. Defaults: column A / 1 header /
+  all columns (so blank sheets work out of the box). Set *data columns* (e.g. `B-D`) when the
+  sheet has a summary or legend block in other columns, so that block never triggers a date.
 - **Per-sheet toggle** — turn auto-date on/off per sheet from the ⚙ panel. Sheets that already
   contain data when first opened default to **off**, so nothing changes until you opt in.
 - **Date format** — pick how the date displays (presets, or a custom format). Changing the

@@ -13,12 +13,15 @@
   var KEY = "__enhanced__";
   var DEFAULT_FMT = "yyyy-mm-dd";
 
-  window.__seConfig = window.__seConfig || { v: 1, dateFormat: DEFAULT_FMT, dateColumn: 0, headerRows: 1, autodate: {} };
+  window.__seConfig = window.__seConfig || { v: 1, dateFormat: DEFAULT_FMT, dateColumn: 0, headerRows: 1, dataCols: "", autodate: {} };
   window.__seLastData = null;
 
   function patch() {
-    var S = window.kendo && kendo.spreadsheet && kendo.spreadsheet.Spreadsheet;
-    if (!S || !S.prototype) return false;
+    // The widget class is kendo.ui.Spreadsheet — NOT kendo.spreadsheet.Spreadsheet (which doesn't
+    // exist; the old target meant this hook never installed, so settings never saved and the
+    // auto-date baseline never re-ran after a note loaded).
+    var S = window.kendo && kendo.ui && kendo.ui.Spreadsheet;
+    if (!S || !S.prototype || typeof S.prototype.toJSON !== "function" || typeof S.prototype.fromJSON !== "function") return false;
     if (S.prototype.__sePatched) return true;
 
     var proto = S.prototype;
@@ -41,12 +44,17 @@
             dateFormat: loaded.dateFormat || DEFAULT_FMT,
             dateColumn: (typeof loaded.dateColumn === "number" && loaded.dateColumn >= 0) ? loaded.dateColumn : 0,
             headerRows: (typeof loaded.headerRows === "number" && loaded.headerRows >= 0) ? loaded.headerRows : 1,
+            dataCols: (typeof loaded.dataCols === "string") ? loaded.dataCols : "",
             autodate: (loaded.autodate && typeof loaded.autodate === "object") ? loaded.autodate : {}
           };
-          if (typeof window.__seOnConfigLoaded === "function") { try { window.__seOnConfigLoaded(); } catch (e) {} }
         }
       } catch (e) {}
-      return origFrom.apply(this, arguments);
+      var ret = origFrom.apply(this, arguments);   // load the data into the widget FIRST...
+      // ...then notify enhanced.js so it can re-baseline against the freshly-loaded rows. This fires
+      // for EVERY load (even notes with no saved settings), fixing the "baseline ran on the empty
+      // default sheet before the note arrived" race that let pre-existing rows get dated.
+      try { if (typeof window.__seAfterLoad === "function") window.__seAfterLoad(); } catch (e) {}
+      return ret;
     };
 
     // Re-apply the last loaded data to a widget (used by enhanced.js's mobile render safety net).
