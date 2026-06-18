@@ -4,13 +4,14 @@
  * enhanced-preinit.js (loaded BEFORE dist.js); both share window.__seConfig.
  *
  * Features:
- *   • Auto-date: when a *brand-new* line-item row gets content and the date column is empty,
- *     that cell is stamped with today's date (frozen, editable, never overwrites a typed date).
- *     Rows that already existed when the sheet was opened are baselined and never touched, so
- *     switching an existing spreadsheet to this editor does NOT back-fill dates.
- *   • Configurable date column + header-row count (per the ⚙ panel), so the feature adapts to
- *     existing sheets instead of assuming "column A = date, row 1 = header".
+ *   • Auto-date: when a *brand-new* line-item row gets content, the date column is stamped with
+ *     today's date (frozen, editable, never overwrites a typed date). Rows that already existed
+ *     when the sheet was opened are baselined and left untouched — switching an existing sheet
+ *     to this editor does NOT back-fill dates.
+ *   • Configurable layout: date column, how many header rows to skip, and which columns count as
+ *     a line item ("data columns") — so a summary/legend block in other columns is ignored.
  *   • Per-sheet toggle. Sheets that already contain data when first opened default to OFF.
+ *   • Whitespace-only cells count as empty (so a " " placeholder neither blocks nor triggers).
  *   • Reformat only touches cells that are already dates — never reinterprets your numbers.
  *   • Mobile render safety net (re-applies content if a slow webview fails to paint it).
  */
@@ -20,7 +21,7 @@
   var DEFAULT_FMT         = "yyyy-mm-dd";
   var DEFAULT_DATE_COL    = 0;     // column A
   var DEFAULT_HEADER_ROWS = 1;     // row 1 is a header
-  var MAX_ROWS            = 600;
+  var MAX_ROWS            = 4096;   // safety cap; real iteration is bounded by the sheet's row count
 
   var PRESETS = [
     { label: "2026-06-18",   fmt: "yyyy-mm-dd" },
@@ -33,7 +34,7 @@
 
   // Shared settings (captured/injected by enhanced-preinit.js). Defensive init in case pre-init didn't run.
   window.__seConfig = window.__seConfig || {
-    v: 1, dateFormat: DEFAULT_FMT, dateColumn: DEFAULT_DATE_COL, headerRows: DEFAULT_HEADER_ROWS, autodate: {}
+    v: 1, dateFormat: DEFAULT_FMT, dateColumn: DEFAULT_DATE_COL, headerRows: DEFAULT_HEADER_ROWS, dataCols: "", autodate: {}
   };
   function cfg() { return window.__seConfig; }
   function dateCol()    { var c = cfg().dateColumn; return (typeof c === "number" && c >= 0) ? c : DEFAULT_DATE_COL; }
@@ -48,9 +49,38 @@
   var hadData = {};    // sheetName -> bool: did the sheet have data when first baselined
 
   function todayAtMidnight() { var d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
-  function isEmpty(v) { return v === null || v === undefined || v === ""; }
+  // Whitespace-only strings count as empty (templates often pre-fill cells with " ").
+  function isEmpty(v) { return v === null || v === undefined || (typeof v === "string" && v.trim() === ""); }
   // A format counts as a date format if it carries a year or day token (number/currency/text never do).
   function isDateFormat(f) { return typeof f === "string" && /[yd]/i.test(f); }
+
+  // "A" -> 0, "B" -> 1, ... "AA" -> 26. A plain number is treated as a 1-based column. null if unparseable.
+  function colToIdx(s) {
+    s = (s || "").trim();
+    if (!s) return null;
+    if (/^\d+$/.test(s)) { var n = parseInt(s, 10); return n >= 1 ? n - 1 : 0; }
+    s = s.toUpperCase();
+    var v = 0;
+    for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i) - 64; if (c < 1 || c > 26) return null; v = v * 26 + c; }
+    return v - 1;
+  }
+  // Parse a column spec like "B,C,D" or "B-D" into { idx: true }. Empty/blank -> null (= all non-date columns).
+  function parseCols(spec) {
+    if (!spec || !spec.trim()) return null;
+    var set = {}, any = false;
+    spec.split(",").forEach(function (part) {
+      part = part.trim(); if (!part) return;
+      var dash = part.split("-");
+      if (dash.length === 2) {
+        var a = colToIdx(dash[0]), b = colToIdx(dash[1]);
+        if (a != null && b != null) { if (a > b) { var t = a; a = b; b = t; } for (var i = a; i <= b; i++) { set[i] = true; any = true; } }
+      } else {
+        var x = colToIdx(part); if (x != null) { set[x] = true; any = true; }
+      }
+    });
+    return any ? set : null;
+  }
+  function dataColSet() { return parseCols(cfg().dataCols); }   // null = watch all non-date columns
 
   // Default ON for sheets that were empty at open; default OFF for sheets that already had data.
   function sheetEnabled(name) {
@@ -70,27 +100,42 @@
     return 1;
   }
 
-  // True if any cell other than the date column has content.
-  function rowIsItem(vals, dc) {
+  // Real row count of a sheet. Reading past it does NOT throw — Kendo wraps and returns earlier rows —
+  // so every scan must be bounded by this, or we'd read (and worse, write) phantom wrapped rows.
+  function rowCountOf(sheet) {
+    try { if (sheet._grid && sheet._grid.rowCount) return sheet._grid.rowCount; } catch (e) {}
+    try { if (sheet._rows && sheet._rows._count) return sheet._rows._count; } catch (e) {}
+    return MAX_ROWS;
+  }
+
+  // A row is a line item if a watched data column (default: any column other than the date column)
+  // holds non-empty content.
+  function rowIsItem(vals, dc, cols) {
     for (var c = 0; c < vals.length; c++) {
-      if (c !== dc && !isEmpty(vals[c])) return true;
+      if (c === dc) continue;
+      if (cols && !cols[c]) continue;
+      if (!isEmpty(vals[c])) return true;
     }
     return false;
   }
 
   // Record which rows are currently populated line-items (the baseline we never back-fill).
   function snapshot(sheet) {
-    var set = {}, dc = dateCol(), width = detectWidth(sheet), start = headerRows();
-    for (var i = 0; i < MAX_ROWS; i++) {
-      var r = start + i, vals;
-      try { vals = sheet.range(r, 0, 1, width).values()[0]; } catch (e) { break; }
-      if (!vals) break;
-      if (rowIsItem(vals, dc)) set[r] = true;
+    var out = {}, dc = dateCol(), cols = dataColSet(), width = detectWidth(sheet), start = headerRows();
+    var rc = Math.min(rowCountOf(sheet), MAX_ROWS);
+    if (rc <= start) return out;
+    var rows;
+    try { rows = sheet.range(start, 0, rc - start, width).values(); } catch (e) { rows = null; }
+    if (!rows) return out;
+    for (var i = 0; i < rows.length; i++) {
+      if (rowIsItem(rows[i], dc, cols)) out[start + i] = true;
     }
-    return set;
+    return out;
   }
 
-  // Baseline every existing sheet BEFORE the user edits, so pre-existing rows are never dated.
+  // Baseline every sheet to its current populated rows, so pre-existing rows are never dated.
+  // Called at startup AND after every data load (see window.__seAfterLoad), so it works even for
+  // notes with no saved settings (the editor loads the note after the widget is created).
   function baselineAll() {
     var sheets = [];
     try { sheets = ss.sheets() || []; } catch (e) {}
@@ -116,16 +161,18 @@
 
     var fmt = cfg().dateFormat || DEFAULT_FMT;
     var dc = dateCol();
+    var cols = dataColSet();
     var width = detectWidth(sheet);
     var start = headerRows();
+    var rc = Math.min(rowCountOf(sheet), MAX_ROWS);
     var changed = false;
     applying = true;
     try {
-      for (var i = 0; i < MAX_ROWS; i++) {
-        var r = start + i, vals;
-        try { vals = sheet.range(r, 0, 1, width).values()[0]; } catch (edge) { break; }
-        if (!vals) break;
-        var item = rowIsItem(vals, dc);
+      var rows = null;
+      if (rc > start) { try { rows = sheet.range(start, 0, rc - start, width).values(); } catch (e) { rows = null; } }
+      for (var i = 0; rows && i < rows.length; i++) {
+        var r = start + i, vals = rows[i];
+        var item = rowIsItem(vals, dc, cols);
         if (item && !known[r]) {
           known[r] = true;                          // a brand-new line item
           if (isEmpty(vals[dc])) {                  // ...with an empty date cell -> stamp it
@@ -149,9 +196,10 @@
     applying = true;
     try {
       var sheet = ss.activeSheet();
-      for (var i = 0; i < MAX_ROWS; i++) {
-        var r = start + i, cell, v, f;
-        try { cell = sheet.range(r, dc); v = cell.value(); } catch (e) { break; }
+      var rc = Math.min(rowCountOf(sheet), MAX_ROWS);
+      for (var r = start; r < rc; r++) {
+        var cell, v, f;
+        try { cell = sheet.range(r, dc); v = cell.value(); } catch (e) { continue; }
         if (isEmpty(v)) continue;
         try { f = cell.format(); } catch (e) { f = null; }
         if (isDateFormat(f)) { try { cell.format(fmt); } catch (e) {} }
@@ -234,19 +282,24 @@
     var hdrTxt = document.createElement("span"); hdrTxt.textContent = "Header rows"; hdrTxt.style.flex = "1";
     var hdrInp = document.createElement("input"); hdrInp.type = "number"; hdrInp.min = "0"; hdrInp.max = "10";
     hdrRow.appendChild(hdrTxt); hdrRow.appendChild(hdrInp);
-    var layHint = document.createElement("div"); layHint.className = "se-muted"; layHint.textContent = "Which column gets the date, and how many top rows are headers.";
-    laySec.appendChild(layLbl); laySec.appendChild(colRow); laySec.appendChild(hdrRow); laySec.appendChild(layHint);
+    var dcRow = document.createElement("div");
+    var dcLbl = document.createElement("div"); dcLbl.textContent = "Data columns";
+    var dcInp = document.createElement("input"); dcInp.type = "text"; dcInp.placeholder = "all (e.g. B-D)";
+    dcRow.appendChild(dcLbl); dcRow.appendChild(dcInp);
+    var layHint = document.createElement("div"); layHint.className = "se-muted";
+    layHint.textContent = "Date goes in the date column when a NEW row gets content in a data column. Leave data columns blank to watch every column; set e.g. B-D to ignore a summary block.";
+    laySec.appendChild(layLbl); laySec.appendChild(colRow); laySec.appendChild(hdrRow); laySec.appendChild(dcRow); laySec.appendChild(layHint);
 
     var shSec = document.createElement("div"); shSec.className = "se-sec";
     var shLbl = document.createElement("div"); shLbl.textContent = "Auto-date these sheets";
     var shList = document.createElement("div"); shList.className = "se-sheets";
-    var shHint = document.createElement("div"); shHint.className = "se-muted"; shHint.textContent = "New rows get today's date in the date column. Off by default for sheets that already had data.";
+    var shHint = document.createElement("div"); shHint.className = "se-muted"; shHint.textContent = "Off by default for sheets that already had data — tick to enable.";
     shSec.appendChild(shLbl); shSec.appendChild(shList); shSec.appendChild(shHint);
 
     panel.appendChild(title); panel.appendChild(fmtSec); panel.appendChild(laySec); panel.appendChild(shSec);
     document.body.appendChild(fab); document.body.appendChild(panel);
 
-    els = { fab: fab, panel: panel, format: fmtSel, custom: fmtCustom, dateCol: colSel, header: hdrInp, sheets: shList };
+    els = { fab: fab, panel: panel, format: fmtSel, custom: fmtCustom, dateCol: colSel, header: hdrInp, dataCols: dcInp, sheets: shList };
 
     fab.addEventListener("click", function () { if (panel.classList.toggle("open")) refreshPanel(); });
     fmtSel.addEventListener("change", function () {
@@ -263,6 +316,10 @@
     });
     hdrInp.addEventListener("change", function () {
       var n = parseInt(hdrInp.value, 10); cfg().headerRows = (isNaN(n) || n < 0) ? DEFAULT_HEADER_ROWS : n;
+      baselineAll(); persist();
+    });
+    dcInp.addEventListener("change", function () {
+      cfg().dataCols = dcInp.value.trim();
       baselineAll(); persist();
     });
   }
@@ -291,18 +348,20 @@
     els.custom.value = isPreset ? "" : fmt;
     els.dateCol.value = String(dateCol());
     els.header.value = String(headerRows());
+    els.dataCols.value = cfg().dataCols || "";
     buildSheetList();
   }
 
   // ---------- startup ----------
   function start(sp) {
     ss = sp;
-    // If note settings arrive after load (e.g. mobile/sync), re-baseline AFTER the data is applied
-    // (pre-init fires this BEFORE origFrom), then refresh the panel.
-    window.__seOnConfigLoaded = function () {
+    // The editor creates the widget, THEN loads the note (async). Re-baseline after every data load
+    // so pre-existing rows are captured even when the note has no saved settings.
+    window.__seAfterLoad = function () {
       setTimeout(function () { try { baselineAll(); refreshPanel(); } catch (e) {} }, 0);
     };
-    baselineAll();                                  // baseline BEFORE any edit -> no back-filling
+    window.__seOnConfigLoaded = window.__seAfterLoad;   // back-compat alias
+    baselineAll();
     ss.bind("change", function () { fillDates(); });
     try { injectUI(); refreshPanel(); } catch (e) { console.warn("[Enhanced] UI failed", e); }
     try { ensureRendered(); } catch (e) {}

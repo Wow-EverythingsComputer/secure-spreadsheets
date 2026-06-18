@@ -4,7 +4,7 @@
   "description": "Enhancements for the Standard Notes Spreadsheets editor. Auto-fill today's date on new rows, with a configurable date column + header rows, selectable date formats, and a per-sheet toggle (off by default for sheets that already contain data).",
   "content_type": "SN|Component",
   "area": "editor-editor",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "url": "https://wow-everythingscomputer.github.io/secure-spreadsheets/v2/index.html",
   "latest_url": "https://wow-everythingscomputer.github.io/secure-spreadsheets/ext.json"
 }
