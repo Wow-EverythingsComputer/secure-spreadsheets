@@ -4,10 +4,17 @@ A fork of [standardnotes/secure-spreadsheets](https://github.com/standardnotes/s
 that adds features on top of the official editor, without modifying its bundle.
 
 ## Features
-- **Auto-date** — when you start a new row (row 2 down) and column A is empty, column A is
-  stamped with today's date as a real, frozen value (never overwrites a date you type).
-- **Per-sheet toggle** — turn auto-date on/off per sheet from the ⚙ panel.
-- **Date format** — pick how the date displays (presets, or a custom format).
+- **Auto-date** — when you add a *brand-new* line-item row, the date column is stamped with
+  today's date as a real, frozen value (never overwrites a date you type). Rows that already
+  existed when the sheet was opened are baselined and left untouched, so switching an existing
+  spreadsheet to this editor does **not** back-fill dates onto old rows.
+- **Configurable layout** — pick which column gets the date and how many header rows to skip
+  from the ⚙ panel. Defaults to column A / 1 header row (so blank sheets work out of the box),
+  but existing sheets that keep their data in column A can point the date at any empty column.
+- **Per-sheet toggle** — turn auto-date on/off per sheet from the ⚙ panel. Sheets that already
+  contain data when first opened default to **off**, so nothing changes until you opt in.
+- **Date format** — pick how the date displays (presets, or a custom format). Changing the
+  format only restyles cells that are already dates — it never reinterprets your own numbers.
 
 Settings are stored inside the note (a hidden `__enhanced__` key in the saved JSON — the same
 trick the editor uses for `rows`/`columns`), so they sync across devices. No extra sheet/tab.

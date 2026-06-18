@@ -13,7 +13,7 @@
   var KEY = "__enhanced__";
   var DEFAULT_FMT = "yyyy-mm-dd";
 
-  window.__seConfig = window.__seConfig || { v: 1, dateFormat: DEFAULT_FMT, autodate: {} };
+  window.__seConfig = window.__seConfig || { v: 1, dateFormat: DEFAULT_FMT, dateColumn: 0, headerRows: 1, autodate: {} };
   window.__seLastData = null;
 
   function patch() {
@@ -39,6 +39,8 @@
           window.__seConfig = {
             v: 1,
             dateFormat: loaded.dateFormat || DEFAULT_FMT,
+            dateColumn: (typeof loaded.dateColumn === "number" && loaded.dateColumn >= 0) ? loaded.dateColumn : 0,
+            headerRows: (typeof loaded.headerRows === "number" && loaded.headerRows >= 0) ? loaded.headerRows : 1,
             autodate: (loaded.autodate && typeof loaded.autodate === "object") ? loaded.autodate : {}
           };
           if (typeof window.__seOnConfigLoaded === "function") { try { window.__seOnConfigLoaded(); } catch (e) {} }
