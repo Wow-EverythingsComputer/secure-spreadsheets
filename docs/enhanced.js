@@ -1,29 +1,21 @@
 /*
- * Spreadsheet Enhanced — add-on layered on the prebuilt Secure Spreadsheets editor.
- *
- * Loaded via a <script> tag in index.html (after dist.js). It does NOT modify the editor
- * bundle; it talks to the live Kendo Spreadsheet widget through the global jQuery the editor
- * already loads.
+ * Spreadsheet Enhanced — UI + auto-date layer for the Secure Spreadsheets editor.
+ * Loaded AFTER dist.js (needs the live Kendo widget). Settings persistence is handled by
+ * enhanced-preinit.js (loaded BEFORE dist.js); both share window.__seConfig.
  *
  * Features:
  *   • Auto-date: when a new row (row 2 down) gets content but column A is empty, column A is
- *     stamped with today's date as a real, frozen value (never overwrites a typed date).
- *   • Per-sheet toggle: auto-date can be turned on/off per sheet.
- *   • Date format: choose how the stamped date is displayed.
- *   • Mobile self-heal: re-applies saved content if a slow mobile webview fails to render it.
- *
- * Settings persist INSIDE the note (a hidden "__enhanced__" key in the saved JSON, the same
- * trick the editor uses for rows/columns), so they sync across devices. No extra sheet/tab.
+ *     stamped with today's date (frozen, editable, never overwrites a typed date).
+ *   • Per-sheet toggle + selectable date format, via the ⚙ panel; settings persist in-note.
+ *   • Mobile render safety net (re-applies content if a slow webview fails to paint it).
  */
 (function () {
   "use strict";
 
-  // ---------- constants ----------
   var START_ROW    = 2;            // first data row (row 1 is treated as a header)
   var DATE_COL_IDX = 0;            // column A
   var DEFAULT_FMT  = "yyyy-mm-dd";
-  var MAX_ROWS     = 600;          // safety cap on rows scanned
-  var KEY          = "__enhanced__";
+  var MAX_ROWS     = 600;
 
   var PRESETS = [
     { label: "2026-06-18",   fmt: "yyyy-mm-dd" },
@@ -34,52 +26,21 @@
     { label: "Jun 18, 2026", fmt: "mmm d, yyyy" }
   ];
 
-  // ---------- state ----------
-  // config.autodate maps sheetName -> boolean. A sheet not listed defaults to ON.
-  var config   = { v: 1, dateFormat: DEFAULT_FMT, autodate: {} };
-  var ss       = null;     // the Kendo Spreadsheet widget
-  var applying = false;    // guard so our own edits don't recurse
-  var els      = null;     // settings-panel DOM refs
-  var origFrom = null;     // original Kendo fromJSON (for the mobile self-heal re-render)
-  var lastData = null;     // last full payload passed to fromJSON (sheets + settings)
-  var fromJSONCount = 0;   // how many times the editor handed us note data (mobile delivery probe)
+  // Shared settings (captured/injected by enhanced-preinit.js). Defensive init in case pre-init didn't run.
+  window.__seConfig = window.__seConfig || { v: 1, dateFormat: DEFAULT_FMT, autodate: {} };
+  function cfg() { return window.__seConfig; }
 
-  // ---------- helpers ----------
+  var ss = null;
+  var applying = false;
+  var els = null;
+
   function todayAtMidnight() { var d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
   function isEmpty(v) { return v === null || v === undefined || v === ""; }
-  function sheetEnabled(name) { return config.autodate[name] !== false; }   // default ON
+  function sheetEnabled(name) { return cfg().autodate[name] !== false; }   // default ON
 
-  // ---------- persistence: piggyback on the note's saved JSON ----------
-  function installPersistence(sp) {
-    var origTo = sp.toJSON.bind(sp);
-    origFrom   = sp.fromJSON.bind(sp);
-    sp.toJSON = function () {
-      var j = origTo();
-      try { j[KEY] = config; } catch (e) {}
-      return j;
-    };
-    sp.fromJSON = function (data) {
-      fromJSONCount++;
-      try {
-        lastData = data;                      // remember what we were asked to load (for self-heal)
-        var loaded = data && data[KEY];
-        if (loaded && typeof loaded === "object") {
-          config = {
-            v: 1,
-            dateFormat: loaded.dateFormat || DEFAULT_FMT,
-            autodate: (loaded.autodate && typeof loaded.autodate === "object") ? loaded.autodate : {}
-          };
-          if (els) refreshPanel();
-        }
-      } catch (e) {}
-      return origFrom(data);
-    };
-  }
-
-  // Save by letting the editor's own save run (it saves on the "change" event).
+  // Saving goes through the editor's own save (it saves on "change"); pre-init's toJSON injects settings.
   function persist() { try { ss.trigger("change"); } catch (e) {} }
 
-  // Find a row width the sheet accepts (handles sheets with fewer than 26 columns).
   function detectWidth(sheet) {
     for (var w = 26; w >= 1; w--) {
       try { sheet.range(START_ROW - 1, 0, 1, w).values(); return w; } catch (e) {}
@@ -94,18 +55,16 @@
     try { sheet = ss.activeSheet(); name = sheet.name(); } catch (e) { return; }
     if (!sheetEnabled(name)) return;
 
-    var fmt = config.dateFormat || DEFAULT_FMT;
+    var fmt = cfg().dateFormat || DEFAULT_FMT;
     var width = detectWidth(sheet);
     var changed = false;
     applying = true;
     try {
       for (var i = 0; i < MAX_ROWS; i++) {
-        var r = (START_ROW - 1) + i;
-        var vals;
+        var r = (START_ROW - 1) + i, vals;
         try { vals = sheet.range(r, 0, 1, width).values()[0]; } catch (edge) { break; }
         if (!vals) break;
         if (!isEmpty(vals[DATE_COL_IDX])) continue;       // already dated -> leave it
-
         var started = false;
         for (var c = 0; c < vals.length; c++) {
           if (c !== DATE_COL_IDX && !isEmpty(vals[c])) { started = true; break; }
@@ -117,13 +76,10 @@
           changed = true;
         }
       }
-      if (changed) ss.trigger("change");                  // persist via the editor's own save
-    } finally {
-      applying = false;
-    }
+      if (changed) ss.trigger("change");
+    } finally { applying = false; }
   }
 
-  // Re-apply a new format to existing date cells in column A of the active sheet.
   function reformatActive(fmt) {
     if (!ss) return;
     applying = true;
@@ -137,35 +93,29 @@
     } finally { applying = false; }
   }
 
-  // ---------- mobile self-heal ----------
-  // Some mobile webviews finish loading a note before the grid is ready to paint, so the saved
-  // sheets never render (you see a blank default sheet). We watch briefly and, if the live grid's
-  // sheets don't match the data we were handed, we re-apply that data and force a redraw.
-  // This only RE-RENDERS — it never saves — and on desktop (where it already matches) it's a no-op.
+  // Mobile render safety net: if the grid didn't paint the loaded sheets, re-apply once.
   function ensureRendered() {
     var tries = 0;
     var timer = setInterval(function () {
       tries++;
       try {
-        var expected = (lastData && lastData.sheets)
-          ? lastData.sheets.map(function (s) { return s.name; }) : null;
-        if (expected && expected.length && origFrom) {
+        var ld = window.__seLastData;
+        var expected = (ld && ld.sheets) ? ld.sheets.map(function (s) { return s.name; }) : null;
+        if (expected && expected.length) {
           var live = [];
           try { live = (ss.sheets() || []).map(function (s) { try { return s.name(); } catch (e) { return ""; } }); } catch (e) {}
           var match = live.length === expected.length && expected.every(function (n) { return live.indexOf(n) >= 0; });
-          if (match) { clearInterval(timer); return; }     // content is in — done
-          origFrom(lastData);                               // re-render saved content (no save)
+          if (match) { clearInterval(timer); return; }
+          if (typeof window.__seReapply === "function") window.__seReapply(ss);
           try { ss.refresh(); } catch (e) {}
-          try { window.dispatchEvent(new Event("resize")); } catch (e) {}
           if (els) refreshPanel();
-          console.log("[Spreadsheet Enhanced] re-applied content (mobile self-heal)");
         }
       } catch (e) {}
-      if (tries > 20) clearInterval(timer);                 // give up after ~6s
+      if (tries > 20) clearInterval(timer);
     }, 300);
   }
 
-  // ---------- settings panel (plain DOM, no framework) ----------
+  // ---------- settings panel ----------
   function injectUI() {
     var style = document.createElement("style");
     style.textContent =
@@ -216,17 +166,14 @@
 
     els = { fab: fab, panel: panel, format: fmtSel, custom: fmtCustom, sheets: shList };
 
-    fab.addEventListener("click", function () {
-      var open = panel.classList.toggle("open");
-      if (open) refreshPanel();
-    });
+    fab.addEventListener("click", function () { if (panel.classList.toggle("open")) refreshPanel(); });
     fmtSel.addEventListener("change", function () {
       if (fmtSel.value === "__custom__") { fmtCustom.style.display = "block"; fmtCustom.focus(); return; }
       fmtCustom.style.display = "none";
-      config.dateFormat = fmtSel.value; reformatActive(config.dateFormat); persist();
+      cfg().dateFormat = fmtSel.value; reformatActive(cfg().dateFormat); persist();
     });
     fmtCustom.addEventListener("change", function () {
-      config.dateFormat = fmtCustom.value.trim() || DEFAULT_FMT; reformatActive(config.dateFormat); persist();
+      cfg().dateFormat = fmtCustom.value.trim() || DEFAULT_FMT; reformatActive(cfg().dateFormat); persist();
     });
   }
 
@@ -239,7 +186,7 @@
       var nm; try { nm = s.name(); } catch (e) { nm = "?"; }
       var row = document.createElement("label"); row.className = "se-row";
       var cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = sheetEnabled(nm);
-      cb.addEventListener("change", function () { config.autodate[nm] = cb.checked; persist(); });
+      cb.addEventListener("change", function () { cfg().autodate[nm] = cb.checked; persist(); });
       var span = document.createElement("span"); span.textContent = nm;
       row.appendChild(cb); row.appendChild(span); box.appendChild(row);
     });
@@ -247,7 +194,7 @@
 
   function refreshPanel() {
     if (!els) return;
-    var fmt = config.dateFormat || DEFAULT_FMT;
+    var fmt = cfg().dateFormat || DEFAULT_FMT;
     var isPreset = PRESETS.some(function (p) { return p.fmt === fmt; });
     els.format.value = isPreset ? fmt : "__custom__";
     els.custom.style.display = isPreset ? "none" : "block";
@@ -258,10 +205,10 @@
   // ---------- startup ----------
   function start(sp) {
     ss = sp;
-    try { installPersistence(ss); } catch (e) { console.warn("[Enhanced] persistence hook failed", e); }
-    ss.bind("change", function () { fillDates(); });   // core auto-date (works even if UI fails)
+    window.__seOnConfigLoaded = function () { try { refreshPanel(); } catch (e) {} };   // refresh UI if note settings arrive after panel built
+    ss.bind("change", function () { fillDates(); });
     try { injectUI(); refreshPanel(); } catch (e) { console.warn("[Enhanced] UI failed", e); }
-    try { ensureRendered(); } catch (e) {}             // mobile render safety net
+    try { ensureRendered(); } catch (e) {}
     console.log("[Spreadsheet Enhanced] ready");
   }
 
