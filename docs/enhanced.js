@@ -21,7 +21,7 @@
   // Single source of truth for what build the user is running — shown in the ⚙ panel and the
   // console. Bump with `node bump-version.js <x.y.z>` (keeps ext.json, preinit, and the
   // index.html cache-busters in lockstep).
-  var VERSION = "1.6.6";
+  var VERSION = "1.7.0";
 
   var DEFAULT_FMT         = "yyyy-mm-dd";
   var DEFAULT_DATE_COL    = 0;     // column A
@@ -221,6 +221,137 @@
     } finally { applying = false; }
   }
 
+  // ---------- import (.xlsx / .csv / .tsv / editor-backup JSON) ----------
+  function sanitizeSheetName(fname) {
+    var base = String(fname || "Imported").replace(/\.[^.]*$/, "").replace(/[\[\]\*\?\/\\:'"]/g, " ").trim();
+    return (base || "Imported").slice(0, 28);
+  }
+
+  function uniqueSheetName(base) {
+    var names = {};
+    try { (ss.sheets() || []).forEach(function (s) { try { names[s.name()] = true; } catch (e) {} }); } catch (e) {}
+    var n = base, i = 2;
+    while (names[n]) { n = base + " (" + (i++) + ")"; }
+    return n;
+  }
+
+  // RFC-4180-ish delimited parser: quoted fields, escaped quotes, \r\n / \n / \r line ends.
+  function parseDelimited(text, delim) {
+    var rows = [], row = [], field = "", inQ = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (inQ) {
+        if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else { inQ = false; } }
+        else { field += ch; }
+      } else if (ch === '"') { inQ = true; }
+      else if (ch === delim) { row.push(field); field = ""; }
+      else if (ch === "\n") { row.push(field); field = ""; rows.push(row); row = []; }
+      else if (ch === "\r") { row.push(field); field = ""; rows.push(row); row = []; if (text[i + 1] === "\n") i++; }
+      else { field += ch; }
+    }
+    if (field !== "" || row.length) { row.push(field); rows.push(row); }
+    while (rows.length && rows[rows.length - 1].every(function (f) { return f === ""; })) rows.pop();
+    return rows;
+  }
+
+  var CSV_MAX_ROWS = 2000;   // sanity cap; SN notes get slow way before this anyway
+
+  function csvToSheet(text, name) {
+    // pick the delimiter from the first line: tab wins if it out-counts commas
+    var nl = text.indexOf("\n");
+    var head = nl > -1 ? text.slice(0, nl) : text;
+    var delim = ((head.match(/\t/g) || []).length > (head.match(/,/g) || []).length) ? "\t" : ",";
+    var grid = parseDelimited(text, delim);
+    if (!grid.length) throw new Error("no rows found");
+    var truncated = grid.length > CSV_MAX_ROWS;
+    if (truncated) grid = grid.slice(0, CSV_MAX_ROWS);
+    var maxCols = 1;
+    grid.forEach(function (r) { if (r.length > maxCols) maxCols = r.length; });
+    var rows = [];
+    grid.forEach(function (r, ri) {
+      var cells = [];
+      r.forEach(function (v, ci) {
+        if (v === "") return;
+        // numeric strings become numbers so SUM etc. work — but keep leading-zero codes as text
+        var t = v.trim();
+        var isNum = /^-?\d+(\.\d+)?$/.test(t) && !/^0\d/.test(t);
+        cells.push({ index: ci, value: isNum ? parseFloat(t) : v });
+      });
+      if (cells.length) rows.push({ index: ri, cells: cells });
+    });
+    return {
+      data: { name: name, rows: rows },
+      nRows: Math.max(grid.length + 20, 75),
+      nCols: Math.max(maxCols + 2, 26),
+      count: grid.length,
+      truncated: truncated
+    };
+  }
+
+  // Route a picked file to the right importer. Exposed as window.__seImportFile for debugging.
+  function importFile(file, status) {
+    status = status || function () {};
+    var fname = file.name || "import";
+    var ext = (fname.split(".").pop() || "").toLowerCase();
+
+    if (ext === "xlsx") {
+      if (typeof ss.fromFile !== "function") { status("⚠ this build's editor can't import Excel"); return; }
+      // The stock editor still owns Excel import (we just re-expose it); its own two confirms about
+      // replacing data + note size will appear. Suppress auto-date until we re-baseline afterwards.
+      applying = true;
+      status("importing " + fname + "…");
+      var p;
+      try { p = ss.fromFile(file); } catch (e) { applying = false; status("⚠ import failed: " + e.message); return; }
+      var after = function () {
+        setTimeout(function () {
+          try { baselineAll(); refreshPanel(); } catch (e) {}
+          applying = false;
+          persist();
+          status("imported " + fname + " (auto-date is OFF for imported sheets — enable below if wanted)");
+        }, 0);
+      };
+      if (p && typeof p.always === "function") { p.always(after); } else { after(); }
+      return;
+    }
+
+    var reader = new FileReader();
+    reader.onerror = function () { status("⚠ could not read " + fname); };
+    reader.onload = function () {
+      var text = String(reader.result || "");
+      // editor-backup JSON (what this editor saves in the note) -> full replace
+      var backup = null;
+      try { var j = JSON.parse(text); if (j && j.sheets && j.sheets.length) backup = j; } catch (e) {}
+      if (backup) {
+        if (!window.confirm("This looks like a spreadsheet backup. Importing it REPLACES everything in this note. Continue?")) { status("import cancelled"); return; }
+        applying = true;
+        try {
+          ss.fromJSON(backup);          // patched fromJSON -> captures __enhanced__ + schedules re-baseline
+          try { ss.refresh(); } catch (e) {}
+          setTimeout(function () { applying = false; persist(); try { refreshPanel(); } catch (e) {} }, 20);
+          status("backup imported (" + backup.sheets.length + " sheet" + (backup.sheets.length === 1 ? "" : "s") + ")");
+        } catch (e) { applying = false; status("⚠ import failed: " + e.message); }
+        return;
+      }
+      if (ext === "json") { status("⚠ not a spreadsheet backup (no sheets found)"); return; }
+      // CSV / TSV / plain text -> NEW sheet, nothing existing is touched
+      try {
+        var name = uniqueSheetName(sanitizeSheetName(fname));
+        var parsed = csvToSheet(text, name);
+        applying = true;
+        var sheet = ss.insertSheet({ rows: parsed.nRows, columns: parsed.nCols, data: parsed.data });
+        try { if (sheet && sheet.name() !== name && typeof ss.renameSheet === "function") ss.renameSheet(sheet, name); } catch (e) {}
+        try { if (sheet) ss.activeSheet(sheet); } catch (e) {}
+        try { baselineAll(); refreshPanel(); } catch (e) {}
+        applying = false;
+        persist();
+        status("imported " + parsed.count + " rows into sheet \"" + name + "\"" +
+               (parsed.truncated ? " (TRUNCATED at " + CSV_MAX_ROWS + " rows)" : ""));
+      } catch (e) { applying = false; status("⚠ import failed: " + e.message); }
+    };
+    reader.readAsText(file);
+  }
+  window.__seImportFile = importFile;
+
   // Mobile render safety net: if the grid didn't paint the loaded sheets, re-apply once.
   function ensureRendered() {
     var tries = 0;
@@ -316,7 +447,19 @@
     var shHint = document.createElement("div"); shHint.className = "se-muted"; shHint.textContent = "Off by default for sheets that already had data — tick to enable.";
     shSec.appendChild(shLbl); shSec.appendChild(shList); shSec.appendChild(shHint);
 
-    panel.appendChild(title); panel.appendChild(verWarn); panel.appendChild(fmtSec); panel.appendChild(laySec); panel.appendChild(shSec);
+    var impSec = document.createElement("div"); impSec.className = "se-sec";
+    var impLbl = document.createElement("div"); impLbl.textContent = "Import";
+    var impBtn = document.createElement("button");
+    impBtn.textContent = "Import .xlsx / .csv / backup…";
+    impBtn.style.cssText = "width:100%;margin-top:4px;padding:6px;border:1px solid #ccc;border-radius:6px;background:#fafafa;font:inherit;cursor:pointer";
+    var impInput = document.createElement("input");
+    impInput.type = "file"; impInput.accept = ".xlsx,.csv,.tsv,.txt,.json"; impInput.style.display = "none";
+    var impStatus = document.createElement("div"); impStatus.className = "se-muted";
+    var impHint = document.createElement("div"); impHint.className = "se-muted";
+    impHint.textContent = "Excel & backups replace the whole spreadsheet (you'll be asked). CSV/TSV comes in as a new sheet.";
+    impSec.appendChild(impLbl); impSec.appendChild(impBtn); impSec.appendChild(impInput); impSec.appendChild(impStatus); impSec.appendChild(impHint);
+
+    panel.appendChild(title); panel.appendChild(verWarn); panel.appendChild(fmtSec); panel.appendChild(laySec); panel.appendChild(shSec); panel.appendChild(impSec);
     document.body.appendChild(fab); document.body.appendChild(panel);
 
     els = { fab: fab, panel: panel, format: fmtSel, custom: fmtCustom, dateCol: colSel, header: hdrInp, dataCols: dcInp, sheets: shList, verWarn: verWarn };
@@ -341,6 +484,12 @@
     dcInp.addEventListener("change", function () {
       cfg().dataCols = dcInp.value.trim();
       baselineAll(); persist();
+    });
+    impBtn.addEventListener("click", function () { impInput.click(); });
+    impInput.addEventListener("change", function () {
+      var f = impInput.files && impInput.files[0];
+      impInput.value = "";                             // so the same file can be picked again
+      if (f) importFile(f, function (msg) { impStatus.textContent = msg; });
     });
   }
 
@@ -385,6 +534,11 @@
     };
     window.__seOnConfigLoaded = window.__seAfterLoad;   // back-compat alias
     baselineAll();
+    // If Excel import runs through the editor's own path (e.g. a future re-enabled toolbar button),
+    // re-baseline once it settles so imported rows are never treated as "new".
+    ss.bind("excelImport", function (e) {
+      try { e.promise.always(function () { setTimeout(function () { try { baselineAll(); refreshPanel(); } catch (x) {} }, 0); }); } catch (x) {}
+    });
     ss.bind("change", function () { fillDates(); });
     try { injectUI(); refreshPanel(); } catch (e) { console.warn("[Enhanced] UI failed", e); }
     try { ensureRendered(); } catch (e) {}

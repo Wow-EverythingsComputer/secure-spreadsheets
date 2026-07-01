@@ -20,6 +20,16 @@ that adds features on top of the official editor, without modifying its bundle.
   running, e.g. `v1.6.6`. If Standard Notes' webview is serving a stale cached copy of one of
   the two script files, the panel shows a red warning naming both versions — reinstall the
   plugin to resync.
+- **Import** — from the ⚙ panel, import files into the editor:
+  - **`.xlsx`** — uses the editor's own built-in Excel importer (Standard Notes shipped it but
+    hid the button). Replaces the whole spreadsheet; the editor's stock warnings ask first.
+  - **`.csv` / `.tsv`** — parsed (quoted fields, escaped quotes, numbers become real numbers,
+    leading-zero codes stay text) and added as a **new sheet** — nothing existing is touched.
+    Capped at 2000 rows (the status line says if a file was truncated).
+  - **backup `.txt`/`.json`** — a note's own saved JSON (like an export). Replaces the whole
+    spreadsheet and restores the ⚙ settings stored inside it, after a confirmation.
+  Imported rows are baselined — auto-date never stamps them — and imported sheets start with
+  auto-date **off**.
 
 Settings are stored inside the note (a hidden `__enhanced__` key in the saved JSON — the same
 trick the editor uses for `rows`/`columns`), so they sync across devices. No extra sheet/tab.
