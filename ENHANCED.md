@@ -16,6 +16,10 @@ that adds features on top of the official editor, without modifying its bundle.
   contain data when first opened default to **off**, so nothing changes until you opt in.
 - **Date format** — pick how the date displays (presets, or a custom format). Changing the
   format only restyles cells that are already dates — it never reinterprets your own numbers.
+- **Version badge** — the ⚙ panel (and the browser console) shows exactly which build is
+  running, e.g. `v1.6.6`. If Standard Notes' webview is serving a stale cached copy of one of
+  the two script files, the panel shows a red warning naming both versions — reinstall the
+  plugin to resync.
 
 Settings are stored inside the note (a hidden `__enhanced__` key in the saved JSON — the same
 trick the editor uses for `rows`/`columns`), so they sync across devices. No extra sheet/tab.
@@ -35,7 +39,20 @@ https://wow-everythingscomputer.github.io/secure-spreadsheets/ext.json
 
 ## Tuning
 Most options live in the ⚙ panel. Code-level constants are at the top of `docs/enhanced.js`
-(`START_ROW`, column-A index, format presets). Commit + push to redeploy.
+(defaults, format presets, `MAX_ROWS` safety cap).
+
+## Releasing a change
+The version lives in **six places** (ext.json, both JS files, and the `?v=` cache-busters in
+both index.html files) and Standard Notes caches aggressively — never bump by hand. Instead:
+
+```
+node bump-version.js 1.6.7
+git commit -am "..." && git push
+```
+
+The script updates every location, keeps `docs/` and the deployed `docs/v2/` copies identical,
+and the new `?v=` forces SN's webview to fetch the fresh scripts. The ⚙ panel badge then tells
+you (and anyone debugging) exactly which build a device is running.
 
 ## Rebuilding from source
 The served editor uses the prebuilt `/docs` files, so no build step is needed. If you ever
