@@ -15,7 +15,7 @@
 
   // Version stamp read by enhanced.js — if it differs from enhanced.js's VERSION, the webview is
   // serving a stale cached copy of one of the two files and the ⚙ panel shows a warning.
-  window.__sePreinitVersion = "1.6.6";
+  window.__sePreinitVersion = "1.7.0";
 
   window.__seConfig = window.__seConfig || { v: 1, dateFormat: DEFAULT_FMT, dateColumn: 0, headerRows: 1, dataCols: "", autodate: {} };
   window.__seLastData = null;
