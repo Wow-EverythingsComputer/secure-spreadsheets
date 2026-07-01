@@ -18,6 +18,11 @@
 (function () {
   "use strict";
 
+  // Single source of truth for what build the user is running — shown in the ⚙ panel and the
+  // console. Bump with `node bump-version.js <x.y.z>` (keeps ext.json, preinit, and the
+  // index.html cache-busters in lockstep).
+  var VERSION = "1.6.6";
+
   var DEFAULT_FMT         = "yyyy-mm-dd";
   var DEFAULT_DATE_COL    = 0;     // column A
   var DEFAULT_HEADER_ROWS = 1;     // row 1 is a header
@@ -92,6 +97,15 @@
 
   // Saving goes through the editor's own save (it saves on "change"); pre-init's toJSON injects settings.
   function persist() { try { ss.trigger("change"); } catch (e) {} }
+
+  // The webview caches enhanced.js and enhanced-preinit.js separately, so one can go stale while
+  // the other updates. Compare our version against the one preinit stamped; "" = all good.
+  function versionStatus() {
+    var pre = window.__sePreinitVersion;
+    if (!pre) return "⚠ settings hook not loaded — settings won't save. Reinstall the plugin (or it's a pre-1.6.6 cached copy).";
+    if (pre !== VERSION) return "⚠ mixed cache: core v" + pre + " / UI v" + VERSION + ". Reinstall the plugin to resync.";
+    return "";
+  }
 
   function detectWidth(sheet) {
     for (var w = 26; w >= 1; w--) {
@@ -253,12 +267,18 @@
     document.head.appendChild(style);
 
     var fab = document.createElement("button");
-    fab.className = "se-fab"; fab.textContent = "⚙"; fab.title = "Spreadsheet Enhanced settings";
+    fab.className = "se-fab"; fab.textContent = "⚙"; fab.title = "Spreadsheet Enhanced v" + VERSION + " — settings";
 
     var panel = document.createElement("div");
     panel.className = "se-panel";
 
     var title = document.createElement("h4"); title.textContent = "Spreadsheet Enhanced";
+    var verBadge = document.createElement("span");
+    verBadge.textContent = "v" + VERSION;
+    verBadge.style.cssText = "float:right;color:#888;font-weight:normal;font-size:11px";
+    title.appendChild(verBadge);
+    var verWarn = document.createElement("div");
+    verWarn.className = "se-muted"; verWarn.style.color = "#b00020"; verWarn.style.display = "none";
 
     var fmtSec = document.createElement("div"); fmtSec.className = "se-sec";
     var fmtLbl = document.createElement("div"); fmtLbl.textContent = "Date format";
@@ -296,10 +316,10 @@
     var shHint = document.createElement("div"); shHint.className = "se-muted"; shHint.textContent = "Off by default for sheets that already had data — tick to enable.";
     shSec.appendChild(shLbl); shSec.appendChild(shList); shSec.appendChild(shHint);
 
-    panel.appendChild(title); panel.appendChild(fmtSec); panel.appendChild(laySec); panel.appendChild(shSec);
+    panel.appendChild(title); panel.appendChild(verWarn); panel.appendChild(fmtSec); panel.appendChild(laySec); panel.appendChild(shSec);
     document.body.appendChild(fab); document.body.appendChild(panel);
 
-    els = { fab: fab, panel: panel, format: fmtSel, custom: fmtCustom, dateCol: colSel, header: hdrInp, dataCols: dcInp, sheets: shList };
+    els = { fab: fab, panel: panel, format: fmtSel, custom: fmtCustom, dateCol: colSel, header: hdrInp, dataCols: dcInp, sheets: shList, verWarn: verWarn };
 
     fab.addEventListener("click", function () { if (panel.classList.toggle("open")) refreshPanel(); });
     fmtSel.addEventListener("change", function () {
@@ -341,6 +361,9 @@
 
   function refreshPanel() {
     if (!els) return;
+    var vs = versionStatus();
+    els.verWarn.textContent = vs;
+    els.verWarn.style.display = vs ? "block" : "none";
     var fmt = cfg().dateFormat || DEFAULT_FMT;
     var isPreset = PRESETS.some(function (p) { return p.fmt === fmt; });
     els.format.value = isPreset ? fmt : "__custom__";
@@ -365,7 +388,8 @@
     ss.bind("change", function () { fillDates(); });
     try { injectUI(); refreshPanel(); } catch (e) { console.warn("[Enhanced] UI failed", e); }
     try { ensureRendered(); } catch (e) {}
-    console.log("[Spreadsheet Enhanced] ready");
+    var vs = versionStatus();
+    console.log("[Spreadsheet Enhanced] v" + VERSION + " ready" + (vs ? " — " + vs : ""));
   }
 
   var tries = 0;
