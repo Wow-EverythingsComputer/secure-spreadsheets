@@ -14,6 +14,9 @@
  *   • Whitespace-only cells count as empty (so a " " placeholder neither blocks nor triggers).
  *   • Reformat only touches cells that are already dates — never reinterprets your numbers.
  *   • Mobile render safety net (re-applies content if a slow webview fails to paint it).
+ *   • Focus guard: the grid only takes focus while you're using it (no stolen title keystrokes,
+ *     no keyboard popping back up). On touch devices selecting a cell doesn't open the keyboard;
+ *     tap the selected cell again (or the formula bar) to edit.
  */
 (function () {
   "use strict";
@@ -21,7 +24,7 @@
   // Single source of truth for what build the user is running — shown in the ⚙ panel and the
   // console. Bump with `node bump-version.js <x.y.z>` (keeps ext.json, preinit, and the
   // index.html cache-busters in lockstep).
-  var VERSION = "1.7.0";
+  var VERSION = "1.8.0";
 
   var DEFAULT_FMT         = "yyyy-mm-dd";
   var DEFAULT_DATE_COL    = 0;     // column A
@@ -524,9 +527,53 @@
     buildSheetList();
   }
 
+  // ---------- focus / mobile keyboard ----------
+  function isTouchDevice() {
+    try { if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) return true; } catch (e) {}
+    try { return !!(window.kendo && kendo.support && kendo.support.mobileOS); } catch (e) { return false; }
+  }
+
+  function activeRef() {
+    try { return String(ss.activeSheet().activeCell()); } catch (e) { return ""; }
+  }
+
+  function setupFocus() {
+    var view = ss._view;
+    var clip = view && view.clipboard && view.clipboard[0];
+    if (!clip) return;
+    if (typeof window.__seGuardElement === "function") window.__seGuardElement(clip);
+    if (!isTouchDevice()) return;
+
+    // Selecting / scrolling / comparing sheets on a phone shouldn't summon the keyboard. The clipboard
+    // stays focusable (hardware keyboards still work) but asks for no on-screen keyboard. To edit:
+    // tap the already-selected cell again (or double-tap a cell), or tap the formula bar.
+    clip.setAttribute("inputmode", "none");
+
+    var t0 = null;
+    document.addEventListener("touchstart", function (e) {
+      if (!e.touches || e.touches.length !== 1) { t0 = null; return; }
+      var p = e.touches[0];
+      t0 = { x: p.clientX, y: p.clientY, at: Date.now(), ref: activeRef() };
+    }, true);
+    document.addEventListener("touchend", function (e) {
+      var s = t0; t0 = null;
+      if (!s || !e.changedTouches || e.changedTouches.length !== 1) return;
+      var p = e.changedTouches[0];
+      if (Math.abs(p.clientX - s.x) > 10 || Math.abs(p.clientY - s.y) > 10 || Date.now() - s.at > 600) return;  // a pan, not a tap
+      try {
+        if (view.editor && view.editor.isActive()) return;
+        var ctl = ss._controller;
+        var obj = ctl.objectAt({ clientX: p.clientX, clientY: p.clientY });
+        if (!obj || obj.type !== "cell" || !s.ref || activeRef() !== s.ref) return;   // tapped a different cell: just select it
+        ctl.onDblClick({ clientX: p.clientX, clientY: p.clientY });                   // same cell again -> edit (keyboard opens)
+      } catch (x) {}
+    }, true);
+  }
+
   // ---------- startup ----------
   function start(sp) {
     ss = sp;
+    try { setupFocus(); } catch (e) { console.warn("[Enhanced] focus setup failed", e); }
     // The editor creates the widget, THEN loads the note (async). Re-baseline after every data load
     // so pre-existing rows are captured even when the note has no saved settings.
     window.__seAfterLoad = function () {

@@ -31,6 +31,14 @@ that adds features on top of the official editor, without modifying its bundle.
   Imported rows are baselined — auto-date never stamps them — and imported sheets start with
   auto-date **off**.
 
+- **Focus guard** — the grid only grabs focus while you're actually using it. Renaming a note
+  no longer gets kicked into the sheet mid-word, and dismissing the phone keyboard keeps it
+  dismissed. Note updates that don't change the sheet (title renames, echoes of the editor's own
+  save) no longer rebuild the grid, so your selection and in-progress typing aren't reset.
+- **Mobile editing** — on touch devices, tapping a cell just selects it (no keyboard), so you can
+  scroll and compare sheets in peace. **Tap the selected cell again** (or double-tap, or tap the
+  formula bar) to edit. Hardware keyboards still type straight into the selected cell.
+
 Settings are stored inside the note (a hidden `__enhanced__` key in the saved JSON — the same
 trick the editor uses for `rows`/`columns`), so they sync across devices. No extra sheet/tab.
 
